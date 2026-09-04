@@ -1,0 +1,6 @@
+{
+  "name": "Công Cụ Toán Học 2D & Hình Học Oxyz 3D",
+  "description": "Nền tảng toán học trực quan hỗ trợ khảo sát hàm số 2D, đạo hàm, tích phân, diện tích hình phẳng, khối tròn xoay 3D, và hình học không gian Oxyz đa chiều.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
