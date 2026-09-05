@@ -11,8 +11,18 @@ import {
   Compass,
   Box,
   Palette,
+  Play,
+  Pause,
+  Sliders,
+  ChevronDown,
+  ChevronUp,
+  Sparkles,
+  Info,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { Point3D, Vector3D, Line3D, Segment3D, Plane3D, Solid3D } from '../../types/math';
+import { computeInSceneUnfolding } from '../../utils/inSceneUnfolding';
 
 interface Canvas3DProps {
   points: Point3D[];
@@ -27,6 +37,8 @@ interface Canvas3DProps {
   onTogglePlaneShading?: () => void;
   onResetToInitial?: () => void;
   onOpenUnfold?: () => void;
+  foldProgress?: number;
+  onFoldProgressChange?: (progress: number) => void;
 }
 
 export const Canvas3D: React.FC<Canvas3DProps> = ({
@@ -42,14 +54,107 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
   onTogglePlaneShading,
   onResetToInitial,
   onOpenUnfold,
+  foldProgress: externalFoldProgress,
+  onFoldProgressChange,
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+
+  // Fullscreen state & toggle
+  const [isFullscreen, setIsFullscreen] = useState<boolean>(false);
+
+  const toggleFullscreen = useCallback(async () => {
+    if (!isFullscreen) {
+      setIsFullscreen(true);
+      if (rootRef.current && document.fullscreenEnabled && !document.fullscreenElement) {
+        try {
+          await rootRef.current.requestFullscreen();
+        } catch {
+          // CSS fixed overlay handles fullscreen gracefully in iframes
+        }
+      }
+    } else {
+      setIsFullscreen(false);
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }, [isFullscreen]);
+
+  // Esc key and fullscreen change listener
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFullscreen) {
+        setIsFullscreen(false);
+        if (document.fullscreenElement) {
+          document.exitFullscreen().catch(() => {});
+        }
+      }
+    };
+
+    const handleFullscreenChange = () => {
+      if (!document.fullscreenElement && isFullscreen) {
+        setIsFullscreen(false);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, [isFullscreen]);
 
   // Settings
   const [showAxes, setShowAxes] = useState<boolean>(true);
   const [showGrid, setShowGrid] = useState<boolean>(true);
   const [isRotating, setIsRotating] = useState<boolean>(false);
   const [localShowPlaneShading, setLocalShowPlaneShading] = useState<boolean>(true);
+
+  // In-Scene 3D Unfolding State (Mở/gấp trực tiếp trên Canvas không gian)
+  const [selectedUnfoldSolidId, setSelectedUnfoldSolidId] = useState<string | null>(null);
+  const [foldProgress, setFoldProgress] = useState<number>(0); // 0 (3D solid) -> 100 (flat 2D net)
+  const [isPlayingFold, setIsPlayingFold] = useState<boolean>(false);
+  const [foldSpeed, setFoldSpeed] = useState<number>(1); // 1x, 2x
+  const [showFaceLabels, setShowFaceLabels] = useState<boolean>(true);
+  const [isUnfoldPanelOpen, setIsUnfoldPanelOpen] = useState<boolean>(true);
+
+  const effectiveFoldProgress =
+    externalFoldProgress !== undefined ? externalFoldProgress : foldProgress;
+
+  const updateFoldProgress = (val: number) => {
+    setFoldProgress(val);
+    if (onFoldProgressChange) {
+      onFoldProgressChange(val);
+    }
+  };
+
+  // Current active solid for unfolding
+  const activeSolidToUnfold =
+    solids.find(s => s.id === selectedUnfoldSolidId) ||
+    solids[0] ||
+    null;
+
+  // Auto-play folding/unfolding animation
+  useEffect(() => {
+    if (!isPlayingFold) return;
+    const interval = setInterval(() => {
+      const nextVal =
+        effectiveFoldProgress >= 100
+          ? 100
+          : Math.min(100, Math.round((effectiveFoldProgress + 1.2 * foldSpeed) * 10) / 10);
+      if (nextVal >= 100) {
+        setIsPlayingFold(false);
+      }
+      updateFoldProgress(nextVal);
+    }, 30);
+    return () => clearInterval(interval);
+  }, [isPlayingFold, foldSpeed, effectiveFoldProgress]);
 
   const effectiveShowPlaneShading =
     externalShowPlaneShading !== undefined ? externalShowPlaneShading : localShowPlaneShading;
@@ -248,8 +353,14 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     };
     window.addEventListener('resize', handleResize);
 
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize();
+    });
+    resizeObserver.observe(container);
+
     return () => {
       cancelAnimationFrame(reqId);
+      resizeObserver.disconnect();
       window.removeEventListener('resize', handleResize);
       dom.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mousemove', onMouseMove);
@@ -594,6 +705,59 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
 
     // Draw Solids
     solids.forEach(solid => {
+      // Check if this solid is currently being unfolded in-scene
+      const isUnfoldingThisSolid =
+        activeSolidToUnfold &&
+        activeSolidToUnfold.id === solid.id &&
+        effectiveFoldProgress > 0;
+
+      if (isUnfoldingThisSolid) {
+        const unfoldResult = computeInSceneUnfolding(solid, points, effectiveFoldProgress, mapCoord);
+        if (unfoldResult.isSupported && unfoldResult.faces.length > 0) {
+          // Render each unfolded face
+          unfoldResult.faces.forEach(face => {
+            const flatVerts: number[] = [];
+            face.vertices.forEach(vt => flatVerts.push(vt.x, vt.y, vt.z));
+
+            const geo = new THREE.BufferGeometry();
+            geo.setAttribute('position', new THREE.Float32BufferAttribute(flatVerts, 3));
+            geo.computeVertexNormals();
+
+            const mat = new THREE.MeshStandardMaterial({
+              color: new THREE.Color(face.color),
+              transparent: true,
+              opacity: effectiveShowPlaneShading ? 0.75 : 0.4,
+              side: THREE.DoubleSide,
+              roughness: 0.35,
+              metalness: 0.1,
+            });
+            group.add(new THREE.Mesh(geo, mat));
+
+            // Face boundary lines
+            face.edgeSegments.forEach(([pA, pB]) => {
+              const eGeo = new THREE.BufferGeometry().setFromPoints([pA, pB]);
+              group.add(new THREE.Line(eGeo, new THREE.LineBasicMaterial({ color: 0xffffff, linewidth: 2 })));
+            });
+
+            // Face label
+            if (showFaceLabels) {
+              const fSprite = createTextSprite(face.name, face.color);
+              fSprite.position.copy(face.center.clone().add(new THREE.Vector3(0, 0.2, 0)));
+              group.add(fSprite);
+            }
+          });
+
+          // Vertex labels
+          unfoldResult.labels.forEach(lbl => {
+            const vSprite = createTextSprite(lbl.text, lbl.color, true);
+            vSprite.position.copy(lbl.position);
+            group.add(vSprite);
+          });
+
+          return; // Handled by in-scene unfolding
+        }
+      }
+
       const color = new THREE.Color(solid.color || '#3b82f6');
 
       // 1. Tetrahedron
@@ -950,13 +1114,24 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
     showGrid,
     effectiveShowPlaneShading,
     selectedPointId,
+    effectiveFoldProgress,
+    activeSolidToUnfold,
+    showFaceLabels,
   ]);
 
   return (
-    <div className="flex flex-col h-full bg-[#0a0a0a] rounded-xl border border-[#222] overflow-hidden shadow-lg shadow-black/40">
+    <div
+      ref={rootRef}
+      id="projection-3d-canvas-container"
+      className={
+        isFullscreen
+          ? 'fixed inset-0 z-50 flex flex-col w-screen h-screen bg-[#070707] overflow-hidden'
+          : 'flex flex-col h-full bg-[#0a0a0a] rounded-xl border border-[#222] overflow-hidden shadow-lg shadow-black/40'
+      }
+    >
       {/* Top Toolbar */}
       <div className="flex flex-wrap items-center justify-between px-4 py-2.5 bg-[#111] border-b border-[#222] gap-2 text-xs">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-mono text-xs uppercase tracking-wider text-zinc-300 flex items-center gap-1.5 font-bold">
             <span className="w-2 h-2 rounded-full bg-blue-500 inline-block shadow-sm shadow-blue-500"></span>
             3D_PROJECTION (OXYZ)
@@ -964,6 +1139,29 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
           <span className="text-[10px] text-zinc-500 font-mono hidden sm:inline">
             Ox (Đỏ) • Oy (Xanh lá) • Oz (Xanh dương)
           </span>
+
+          {/* Nút Phóng To / Thu Nhỏ Toàn Màn Hình */}
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className={`px-2.5 py-1 rounded text-[11px] font-mono border transition-all flex items-center gap-1.5 ml-1 ${
+              isFullscreen
+                ? 'bg-amber-950/80 text-amber-300 border-amber-500/80 font-bold shadow-md shadow-amber-950/70 ring-1 ring-amber-500/50'
+                : 'bg-blue-950/60 text-blue-300 border-blue-700/80 hover:bg-blue-900/70 hover:text-white font-medium shadow-sm shadow-blue-950/40'
+            }`}
+            title={
+              isFullscreen
+                ? 'Thoát chế độ toàn màn hình cửa sổ 3D_PROJECTION (OXYZ) (Phím Esc)'
+                : 'Hiển thị cửa sổ 3D_PROJECTION (OXYZ) full toàn màn hình'
+            }
+          >
+            {isFullscreen ? (
+              <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+            ) : (
+              <Maximize2 className="w-3.5 h-3.5 text-blue-400" />
+            )}
+            <span>{isFullscreen ? 'Thoát Full màn hình (Esc)' : 'Full màn hình'}</span>
+          </button>
         </div>
 
         {/* Visibility toggles */}
@@ -978,6 +1176,23 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
             <RotateCcw className="w-3 h-3 text-rose-400" />
             <span>Về ban đầu</span>
           </button>
+
+          {/* Nút Mở/Gấp 3D Trực tiếp trên Canvas (Phương án 1) */}
+          {solids.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setIsUnfoldPanelOpen(prev => !prev)}
+              className={`px-2.5 py-0.5 rounded text-[11px] font-mono border transition-all flex items-center gap-1.5 ${
+                isUnfoldPanelOpen || effectiveFoldProgress > 0
+                  ? 'bg-cyan-950/60 text-cyan-300 border-cyan-700/80 font-semibold shadow-sm shadow-cyan-950/50'
+                  : 'bg-[#18181b] text-zinc-400 border-zinc-800 hover:text-zinc-200'
+              }`}
+              title="Bật/Tắt bảng thanh trượt mở/gấp trực tiếp khối 3D trên Canvas không gian"
+            >
+              <Sliders className="w-3 h-3 text-cyan-400" />
+              <span>Mở/Gấp 3D {effectiveFoldProgress > 0 ? `(${Math.round(effectiveFoldProgress)}%)` : ''}</span>
+            </button>
+          )}
 
           {/* Nút Trải phẳng 2D */}
           {onOpenUnfold && (
@@ -1062,6 +1277,233 @@ export const Canvas3D: React.FC<Canvas3DProps> = ({
         <div className="absolute top-2 left-2 text-[10px] text-zinc-500 font-mono pointer-events-none bg-[#0a0a0a]/80 px-2.5 py-1 rounded border border-zinc-800">
           Kéo chuột: Xoay 360° • Cuộn chuột: Phóng to/Thu nhỏ
         </div>
+
+        {/* Floating Quick Exit Fullscreen Button */}
+        {isFullscreen && (
+          <button
+            type="button"
+            onClick={toggleFullscreen}
+            className="absolute top-3 right-3 z-30 px-3 py-1.5 rounded-lg bg-[#111]/90 backdrop-blur-md border border-amber-600/80 text-amber-300 text-xs font-mono font-bold flex items-center gap-2 shadow-xl hover:bg-amber-950/90 hover:border-amber-400 transition-all active:scale-95"
+            title="Thoát chế độ toàn màn hình (Phím Esc)"
+          >
+            <Minimize2 className="w-3.5 h-3.5 text-amber-400" />
+            <span>Thoát Full màn hình</span>
+            <kbd className="px-1.5 py-0.5 rounded bg-black/60 text-[10px] text-zinc-400 border border-zinc-700 font-mono">
+              ESC
+            </kbd>
+          </button>
+        )}
+
+        {/* Floating In-Scene Unfolding Controller (Phương án 1: Trực tiếp trên Canvas 3D) */}
+        {solids.length > 0 && isUnfoldPanelOpen && activeSolidToUnfold && (
+          <div
+            className="absolute bottom-3 left-3 right-3 sm:right-auto sm:w-[420px] bg-[#0c1222]/95 backdrop-blur-md rounded-xl border border-cyan-800/60 shadow-2xl p-3 z-20 text-xs font-sans text-zinc-200 shadow-black/80"
+            onClick={e => e.stopPropagation()}
+            onMouseDown={e => e.stopPropagation()}
+          >
+            {/* Header */}
+            <div className="flex items-center justify-between gap-2 pb-2 border-b border-cyan-950/80 mb-2">
+              <div className="flex items-center gap-2">
+                <div className="p-1 rounded-md bg-cyan-950/80 border border-cyan-800/70 text-cyan-400">
+                  <Sliders className="w-3.5 h-3.5" />
+                </div>
+                <div>
+                  <div className="font-semibold text-zinc-100 flex items-center gap-1.5 text-[12px]">
+                    <span>Mở / Gấp Khối 3D Trực Tiếp</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-900/60 text-cyan-300 font-mono border border-cyan-700/50">
+                      OXYZ
+                    </span>
+                  </div>
+                  <div className="text-[10px] text-zinc-400">
+                    Bảo toàn độ dài cạnh & diện tích các mặt
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-1">
+                {solids.length > 1 && (
+                  <select
+                    value={activeSolidToUnfold.id}
+                    onChange={e => {
+                      setSelectedUnfoldSolidId(e.target.value);
+                      updateFoldProgress(0);
+                      setIsPlayingFold(false);
+                    }}
+                    className="text-[10px] bg-[#111] border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-200 font-mono focus:outline-none"
+                  >
+                    {solids.map(s => (
+                      <option key={s.id} value={s.id}>
+                        {s.name || s.type}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setIsUnfoldPanelOpen(false)}
+                  className="p-1 text-zinc-400 hover:text-zinc-200 rounded hover:bg-white/5 transition-colors"
+                  title="Thu nhỏ bảng điều khiển"
+                >
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            </div>
+
+            {/* Slider & Percentage */}
+            <div className="space-y-1.5 mb-2.5">
+              <div className="flex items-center justify-between text-[11px] font-mono">
+                <span className="text-zinc-400">Khối 3D (0%)</span>
+                <span className="px-2 py-0.5 rounded-full bg-cyan-950/80 border border-cyan-800/70 text-cyan-300 font-bold">
+                  {Math.round(effectiveFoldProgress)}% • {effectiveFoldProgress === 0 ? 'Khối gốc' : effectiveFoldProgress >= 100 ? 'Trải phẳng 2D' : `Mở ${(effectiveFoldProgress * 0.9).toFixed(0)}°`}
+                </span>
+                <span className="text-zinc-400">Trải phẳng (100%)</span>
+              </div>
+
+              <input
+                type="range"
+                min="0"
+                max="100"
+                step="1"
+                value={effectiveFoldProgress}
+                onChange={e => {
+                  updateFoldProgress(Number(e.target.value));
+                  setIsPlayingFold(false);
+                }}
+                className="w-full h-2 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-cyan-400 focus:outline-none"
+              />
+            </div>
+
+            {/* Control Buttons */}
+            <div className="flex items-center justify-between gap-1.5 mb-2">
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateFoldProgress(0);
+                    setIsPlayingFold(false);
+                  }}
+                  className={`px-2 py-1 rounded text-[10px] font-mono border transition-all ${
+                    effectiveFoldProgress === 0
+                      ? 'bg-blue-600 text-white border-blue-500 font-bold'
+                      : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:bg-zinc-800'
+                  }`}
+                  title="Gấp lại thành khối 3D nguyên bản (0%)"
+                >
+                  0% Gấp 3D
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (effectiveFoldProgress >= 100) {
+                      updateFoldProgress(0);
+                      setIsPlayingFold(true);
+                    } else {
+                      setIsPlayingFold(prev => !prev);
+                    }
+                  }}
+                  className={`px-2.5 py-1 rounded text-[10px] font-mono border flex items-center gap-1 transition-all ${
+                    isPlayingFold
+                      ? 'bg-amber-600 text-white border-amber-500 font-bold animate-pulse'
+                      : 'bg-cyan-950/80 text-cyan-300 border-cyan-700/80 hover:bg-cyan-900/80'
+                  }`}
+                  title={isPlayingFold ? 'Tạm dừng mô phỏng' : 'Tự động mở trải phẳng mượt mà'}
+                >
+                  {isPlayingFold ? <Pause className="w-3 h-3" /> : <Play className="w-3 h-3" />}
+                  <span>{isPlayingFold ? 'Dừng' : 'Chạy'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    updateFoldProgress(100);
+                    setIsPlayingFold(false);
+                  }}
+                  className={`px-2 py-1 rounded text-[10px] font-mono border transition-all ${
+                    effectiveFoldProgress === 100
+                      ? 'bg-emerald-600 text-white border-emerald-500 font-bold'
+                      : 'bg-zinc-900/90 text-zinc-300 border-zinc-700 hover:bg-zinc-800'
+                  }`}
+                  title="Mở phẳng hoàn toàn 100% cùng mặt phẳng đáy"
+                >
+                  100% Phẳng
+                </button>
+              </div>
+
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setFoldSpeed(s => (s === 1 ? 2 : 1))}
+                  className="px-1.5 py-1 rounded text-[10px] font-mono bg-zinc-900 border border-zinc-700 text-zinc-300 hover:bg-zinc-800"
+                  title="Tốc độ hoạt ảnh"
+                >
+                  {foldSpeed}x
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setShowFaceLabels(prev => !prev)}
+                  className={`px-1.5 py-1 rounded text-[10px] font-mono border transition-colors ${
+                    showFaceLabels
+                      ? 'bg-cyan-950/70 text-cyan-300 border-cyan-800'
+                      : 'bg-zinc-900 text-zinc-500 border-zinc-800'
+                  }`}
+                  title="Bật/Tắt hiển thị nhãn tên các mặt và các đỉnh trên mô hình"
+                >
+                  Nhãn: {showFaceLabels ? 'BẬT' : 'TẮT'}
+                </button>
+              </div>
+            </div>
+
+            {/* Educational Geometric Explanation */}
+            <div className="p-2 rounded-lg bg-black/40 border border-cyan-950/80 text-[10px] text-zinc-300 space-y-1">
+              {activeSolidToUnfold.type === 'sphere' ? (
+                <div className="text-amber-300 flex items-start gap-1">
+                  <Info className="w-3.5 h-3.5 text-amber-400 shrink-0 mt-0.5" />
+                  <span>
+                    <strong>Định lý Egregium của Gauss:</strong> Mặt cầu có độ cong Gauss K &gt; 0, không thể trải phẳng lên mặt phẳng 2D mà không làm biến dạng hoặc rách bề mặt.
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center gap-1 text-cyan-300">
+                    <Sparkles className="w-3 h-3 text-cyan-400 shrink-0" />
+                    <span>
+                      {foldProgress === 0
+                        ? 'Khối 3D kín: Thể tích & các góc nhị diện nguyên bản.'
+                        : foldProgress >= 100
+                        ? 'Tất cả các mặt đã đồng phẳng 2D, giữ nguyên 100% kích thước cạnh & diện tích.'
+                        : `Các mặt bên đang quay cứng quanh các cạnh đáy bản lề (${(foldProgress * 0.9).toFixed(0)}°).`}
+                    </span>
+                  </div>
+                  {onOpenUnfold && (
+                    <button
+                      type="button"
+                      onClick={onOpenUnfold}
+                      className="text-indigo-300 hover:text-indigo-200 underline font-mono shrink-0"
+                    >
+                      Bản vẽ Net ↗
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Compact Toggle Pill when panel is minimized */}
+        {solids.length > 0 && !isUnfoldPanelOpen && (
+          <button
+            type="button"
+            onClick={() => setIsUnfoldPanelOpen(true)}
+            className="absolute bottom-3 left-3 bg-[#0c1222]/90 hover:bg-[#0c1222] backdrop-blur-md rounded-lg border border-cyan-800/80 shadow-lg px-2.5 py-1.5 z-20 text-[11px] font-mono text-cyan-300 flex items-center gap-1.5 transition-all active:scale-95 shadow-black/60"
+            title="Mở bảng điều khiển mở/gấp 3D"
+          >
+            <Sliders className="w-3.5 h-3.5 text-cyan-400" />
+            <span>Mở/Gấp 3D ({foldProgress}%)</span>
+            <ChevronUp className="w-3 h-3 text-cyan-400" />
+          </button>
+        )}
       </div>
     </div>
   );

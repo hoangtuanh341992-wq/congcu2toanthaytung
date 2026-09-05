@@ -28,9 +28,7 @@ import {
   angleLineAndPlane,
   angleBetweenPlanes,
   distancePoints,
-  distancePointToLine,
   distancePointToPlane,
-  distanceLineToLine,
   planeFrom3Points,
   volumeTetrahedron,
   formatPlaneEquation,
@@ -52,6 +50,9 @@ import { Unfold2DModal } from './Unfold2DModal';
 export const Tool3DView: React.FC = () => {
   // Retrieve any previously active session from offline localStorage
   const initialSession = useMemo(() => getActiveSession(), []);
+
+  // Shared unfolding animation progress
+  const [sharedFoldProgress, setSharedFoldProgress] = useState<number>(0);
 
   // Current 3D scene state
   const [points, setPoints] = useState<Point3D[]>(() => initialSession?.points || OXYZ_PRESETS[1].points);
@@ -121,7 +122,7 @@ export const Tool3DView: React.FC = () => {
   const [planeNorm2, setPlaneNorm2] = useState({ a: 2, b: 1, c: -1, d: 0 });
 
   // Distance calculator state
-  const [distMode, setDistMode] = useState<'pt_pt' | 'pt_line' | 'pt_plane' | 'line_line'>('pt_plane');
+  const [distMode, setDistMode] = useState<'pt_pt' | 'pt_plane'>('pt_pt');
   const [distPt1, setDistPt1] = useState<string>('S');
   const [distPt2, setDistPt2] = useState<string>('A');
 
@@ -485,6 +486,218 @@ export const Tool3DView: React.FC = () => {
 
   const getPoint = (id: string) => points.find(p => p.id === id);
 
+  // Render danh sách đối tượng hình học đã dựng
+  const renderConstructedObjects = () => (
+    <div className="bg-[#0a0a0a] rounded-xl border border-[#222] p-4 shadow-lg shadow-black/40 text-xs space-y-3 font-mono">
+      <div className="flex items-center justify-between border-b border-[#222] pb-2">
+        <span className="font-bold text-white text-xs uppercase tracking-wider flex items-center gap-1.5">
+          <Layers className="w-3.5 h-3.5 text-blue-400" />
+          ĐỐI TƯỢNG ĐÃ DỰNG ({vectors.length + segments.length + lines.length + planes.length})
+        </span>
+        <span className="text-[10px] text-zinc-500">
+          {vectors.length} véc tơ • {segments.length} đoạn • {lines.length} đường • {planes.length} mặt
+        </span>
+      </div>
+
+      {/* Véc tơ */}
+      {vectors.length > 0 && (
+        <div className="space-y-1.5">
+          <span className="text-zinc-500 font-bold block text-[10px] uppercase text-emerald-400">
+            Véc tơ ({vectors.length}):
+          </span>
+          <div className="space-y-1 max-h-36 overflow-y-auto">
+            {vectors.map(v => (
+              <div
+                key={v.id}
+                className="bg-[#111] px-2.5 py-1.5 rounded border border-zinc-800 flex justify-between items-center text-[11px]"
+              >
+                <div className="flex items-center gap-2">
+                  <span
+                    className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                    style={{ backgroundColor: v.color || '#10b981' }}
+                  />
+                  <span className="font-bold text-zinc-200">{v.name}</span>
+                  <span className="text-zinc-400">({v.x}; {v.y}; {v.z})</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => handleDeleteVector(v.id)}
+                  className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors"
+                  title="Xóa véc tơ này"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Đoạn thẳng */}
+      {segments.length > 0 && (
+        <div className="space-y-1.5 pt-1 border-t border-zinc-800/60">
+          <span className="text-zinc-500 font-bold block text-[10px] uppercase text-amber-400">
+            Đoạn thẳng ({segments.length}):
+          </span>
+          <div className="space-y-1 max-h-36 overflow-y-auto">
+            {segments.map(s => {
+              const p1 = points.find(p => p.id === s.point1Id);
+              const p2 = points.find(p => p.id === s.point2Id);
+              return (
+                <div
+                  key={s.id}
+                  className="bg-[#111] px-2.5 py-1.5 rounded border border-zinc-800 flex justify-between items-center text-[11px]"
+                >
+                  <div className="flex items-center gap-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: s.color || '#f59e0b' }}
+                    />
+                    <span className="font-bold text-zinc-200">{s.name}</span>
+                    <span className="text-zinc-400">
+                      [{p1?.name || '?'}, {p2?.name || '?'}]
+                    </span>
+                    {s.length && (
+                      <span className="text-zinc-500 text-[10px]">d = {s.length.toFixed(2)}</span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteSegment(s.id)}
+                    className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors"
+                    title="Xóa đoạn thẳng này"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Đường thẳng */}
+      {lines.length > 0 && (
+        <div className="space-y-1.5 pt-1 border-t border-zinc-800/60">
+          <span className="text-zinc-500 font-bold block text-[10px] uppercase text-pink-400">
+            Đường thẳng ({lines.length}):
+          </span>
+          <div className="space-y-1 max-h-36 overflow-y-auto">
+            {lines.map(l => {
+              const p1 = points.find(p => p.id === l.point1Id);
+              const p2 = points.find(p => p.id === l.point2Id);
+              return (
+                <div
+                  key={l.id}
+                  className="bg-[#111] px-2.5 py-1.5 rounded border border-zinc-800 flex justify-between items-center text-[11px]"
+                >
+                  <div className="flex items-center gap-2 overflow-hidden">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: l.color || '#ec4899' }}
+                    />
+                    <span className="font-bold text-zinc-200 flex-shrink-0">{l.name}</span>
+                    {l.dir ? (
+                      <span className="text-zinc-400 truncate text-[10px]">
+                        u⃗({l.dir.x}; {l.dir.y}; {l.dir.z})
+                      </span>
+                    ) : (
+                      <span className="text-zinc-400 text-[10px]">
+                        ({p1?.name || '?'}{p2?.name || '?'})
+                      </span>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleDeleteLine(l.id)}
+                    className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors flex-shrink-0"
+                    title="Xóa đường thẳng này"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {/* Mặt phẳng */}
+      {planes.length > 0 && (
+        <div className="space-y-1.5 pt-1 border-t border-zinc-800/60">
+          <span className="text-zinc-500 font-bold block text-[10px] uppercase text-blue-400">
+            Mặt phẳng ({planes.length}):
+          </span>
+          <div className="space-y-1 max-h-36 overflow-y-auto">
+            {planes.map(pl => {
+              const isVisible = pl.visible !== false;
+              const isFilled = pl.fillColor !== false;
+              return (
+                <div
+                  key={pl.id}
+                  className={`bg-[#111] px-2.5 py-1.5 rounded border transition-colors flex justify-between items-center text-[11px] ${
+                    !isVisible ? 'opacity-40 border-zinc-900' : 'border-zinc-800'
+                  }`}
+                >
+                  <div className="flex items-center gap-2 overflow-hidden flex-1 mr-2">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: pl.color || '#38bdf8' }}
+                    />
+                    <span className="font-bold text-zinc-200">{pl.name}:</span>
+                    <span className="text-zinc-300 truncate text-[10px]">{formatPlaneEquation(pl)}</span>
+                    {pl.pointIds && pl.pointIds.length >= 3 && pl.regionOnly && (
+                      <span className="text-[9px] px-1 py-0.2 bg-blue-950/60 text-blue-300 rounded border border-blue-900/50 flex-shrink-0 font-mono">
+                        Miền đa giác
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-1 flex-shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePlaneFill(pl.id)}
+                      className={`p-1 rounded transition-colors ${
+                        isFilled
+                          ? 'text-purple-400 hover:bg-purple-950/40'
+                          : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'
+                      }`}
+                      title={isFilled ? 'Tắt tô màu bề mặt (chỉ hiện khung viền)' : 'Bật tô màu bề mặt'}
+                    >
+                      <Palette className="w-3.5 h-3.5" />
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleTogglePlaneVisibility(pl.id)}
+                      className={`p-1 rounded transition-colors ${
+                        isVisible
+                          ? 'text-zinc-400 hover:text-white hover:bg-zinc-800'
+                          : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'
+                      }`}
+                      title={isVisible ? 'Ẩn mặt phẳng này' : 'Hiện mặt phẳng này'}
+                    >
+                      {isVisible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleDeletePlane(pl.id)}
+                      className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors"
+                      title="Xóa mặt phẳng này"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+
   return (
     <div className="space-y-4">
       {/* Top Presets & Storage Header */}
@@ -688,10 +901,10 @@ export const Tool3DView: React.FC = () => {
         </div>
       </div>
 
-      {/* Main 3D Stage & Interactive Analysis */}
+      {/* MAIN STAGE: 3D Canvas (7 cols) + Máy tính hình học & Danh sách đối tượng (5 cols) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
-        {/* 3D Three.js Canvas (7 cols) */}
-        <div className="lg:col-span-7 min-h-[500px]">
+        {/* 3D Canvas (7 cols) */}
+        <div className="lg:col-span-7 min-h-[520px]">
           <Canvas3D
             points={points}
             vectors={vectors}
@@ -706,10 +919,12 @@ export const Tool3DView: React.FC = () => {
               setUnfoldTargetScene(null);
               setIsUnfoldModalOpen(true);
             }}
+            foldProgress={sharedFoldProgress}
+            onFoldProgressChange={setSharedFoldProgress}
           />
         </div>
 
-        {/* Right Panel: Geometry Builder & Calculator (5 cols) */}
+        {/* Cột chứa Máy tính hình học OXYZ & Danh sách đối tượng (5 cols) */}
         <div className="lg:col-span-5 space-y-4">
           {/* Calculator Tabs */}
           <div className="bg-[#0a0a0a] rounded-xl border border-[#222] p-4 shadow-lg shadow-black/40">
@@ -806,9 +1021,6 @@ export const Tool3DView: React.FC = () => {
                 {/* Sub-mode: 2 Véc tơ */}
                 {angleMode === 'vec_vec' && (() => {
                   const deg = angleBetweenVectors(vec1Input, vec2Input);
-                  const dotVal = vec.dot(vec1Input, vec2Input);
-                  const mag1 = vec.magnitude(vec1Input);
-                  const mag2 = vec.magnitude(vec2Input);
                   return (
                     <div className="space-y-2">
                       <div className="grid grid-cols-2 gap-2 font-mono">
@@ -860,16 +1072,11 @@ export const Tool3DView: React.FC = () => {
                         </div>
                       </div>
 
-                      <div className="p-3 bg-[#111] rounded border border-zinc-800 space-y-1.5">
-                        <div className="font-mono text-zinc-300">
-                          <KatexMath math={`\\cos(\\vec{u}, \\vec{v}) = \\frac{\\vec{u}\\cdot\\vec{v}}{|\\vec{u}||\\vec{v}|} = \\frac{${dotVal}}{${mag1.toFixed(2)} \\times ${mag2.toFixed(2)}}`} />
-                        </div>
-                        <div className="text-xs font-bold text-white flex items-center justify-between border-t border-zinc-900 pt-1.5 font-mono">
-                          <span className="text-zinc-400">Góc giữa 2 véc tơ:</span>
-                          <span className="text-base text-blue-400">
-                            {deg.toFixed(2)}°
-                          </span>
-                        </div>
+                      <div className="p-3 bg-[#111] rounded border border-zinc-800 flex justify-between items-center font-mono">
+                        <span className="text-zinc-400">Góc giữa 2 véc tơ:</span>
+                        <span className="text-base text-blue-400 font-bold">
+                          {deg.toFixed(2)}°
+                        </span>
                       </div>
                     </div>
                   );
@@ -1074,9 +1281,7 @@ export const Tool3DView: React.FC = () => {
                 <div className="flex gap-1 border-b border-[#222] pb-2">
                   {[
                     { id: 'pt_pt', label: 'Điểm - Điểm' },
-                    { id: 'pt_line', label: 'Điểm - Đ.Thẳng' },
                     { id: 'pt_plane', label: 'Điểm - M.Phẳng' },
-                    { id: 'line_line', label: '2 Đ.T Chéo' },
                   ].map(tab => (
                     <button
                       key={tab.id}
@@ -1187,38 +1392,6 @@ export const Tool3DView: React.FC = () => {
                     </div>
                   );
                 })()}
-
-                {distMode === 'pt_line' && (() => {
-                  const pM = getPoint(distPt1) || points[0];
-                  const pA = getPoint(line1P1) || points[1];
-                  const pB = getPoint(line1P2) || points[2];
-                  const u = pA && pB ? vec.fromPoints(pA, pB) : { x: 1, y: 0, z: 0 };
-                  const d = pM && pA ? distancePointToLine(pM, pA, u) : 0;
-                  return (
-                    <div className="space-y-2">
-                      <div className="p-3 bg-[#111] rounded border border-zinc-800 flex justify-between items-center">
-                        <span className="text-zinc-400">d({pM?.name}, Δ):</span>
-                        <span className="text-base text-emerald-400 font-bold">{d.toFixed(3)}</span>
-                      </div>
-                    </div>
-                  );
-                })()}
-
-                {distMode === 'line_line' && (() => {
-                  const p1 = getPoint(line1P1) || points[0];
-                  const p2 = getPoint(line1P2) || points[1];
-                  const p3 = getPoint(line2P1) || points[2];
-                  const p4 = getPoint(line2P2) || points[3];
-                  const u1 = p1 && p2 ? vec.fromPoints(p1, p2) : { x: 1, y: 0, z: 0 };
-                  const u2 = p3 && p4 ? vec.fromPoints(p3, p4) : { x: 0, y: 1, z: 0 };
-                  const d = p1 && p3 ? distanceLineToLine(p1, u1, p3, u2) : 0;
-                  return (
-                    <div className="p-3 bg-[#111] rounded border border-zinc-800 flex justify-between items-center">
-                      <span className="text-zinc-400">Khoảng cách giữa 2 đường chéo nhau:</span>
-                      <span className="text-base text-emerald-400 font-bold">{d.toFixed(3)}</span>
-                    </div>
-                  );
-                })()}
               </div>
             )}
 
@@ -1229,6 +1402,11 @@ export const Tool3DView: React.FC = () => {
               const pC = getPoint(volTetraC) || points[2];
               const pD = getPoint(volTetraD) || points[3];
               const vTetra = (pA && pB && pC && pD) ? volumeTetrahedron(pA, pB, pC, pD) : 0;
+
+              const nameA = pA?.name || 'A';
+              const nameB = pB?.name || 'B';
+              const nameC = pC?.name || 'C';
+              const nameD = pD?.name || 'D';
 
               const vSphere = (4 / 3) * Math.PI * Math.pow(sphereR, 3);
               const sSphere = 4 * Math.PI * Math.pow(sphereR, 2);
@@ -1242,10 +1420,10 @@ export const Tool3DView: React.FC = () => {
 
               return (
                 <div className="space-y-3 text-xs font-mono">
-                  {/* Tứ diện ABCD */}
+                  {/* Tứ diện */}
                   <div className="p-3 bg-[#111] rounded border border-zinc-800 space-y-2">
                     <span className="text-zinc-400 font-semibold block text-[11px] uppercase">
-                      1. Thể tích Tứ diện ABCD:
+                      1. Thể tích Tứ diện {nameA}{nameB}{nameC}{nameD}:
                     </span>
                     <div className="grid grid-cols-4 gap-1">
                       <select
@@ -1278,8 +1456,12 @@ export const Tool3DView: React.FC = () => {
                       </select>
                     </div>
 
-                    <div className="text-zinc-300 bg-[#0a0a0a] p-2 rounded border border-zinc-800 flex justify-between items-center">
-                      <span>V_ABCD = 1/6 |[AB, AC]·AD|</span>
+                    <div className="text-zinc-300 bg-[#0a0a0a] p-2.5 rounded border border-zinc-800 flex flex-wrap justify-between items-center gap-2">
+                      <div className="text-sm font-mono text-zinc-100">
+                        <KatexMath
+                          math={`V_{${nameA}${nameB}${nameC}${nameD}} = \\frac{1}{6} \\left| \\left[ \\overrightarrow{${nameA}${nameB}}, \\overrightarrow{${nameA}${nameC}} \\right] \\cdot \\overrightarrow{${nameA}${nameD}} \\right|`}
+                        />
+                      </div>
                       <span className="text-base text-emerald-400 font-bold">{vTetra.toFixed(3)} u³</span>
                     </div>
                   </div>
@@ -1321,218 +1503,8 @@ export const Tool3DView: React.FC = () => {
             })()}
           </div>
 
-          {/* DANH SÁCH ĐỐI TƯỢNG HÌNH HỌC ĐÃ DỰNG */}
-          <div className="bg-[#0a0a0a] rounded-xl border border-[#222] p-4 shadow-lg shadow-black/40 text-xs space-y-3 font-mono">
-            <div className="flex items-center justify-between border-b border-[#222] pb-2">
-              <span className="font-bold text-white text-xs uppercase tracking-wider flex items-center gap-1.5">
-                <Layers className="w-3.5 h-3.5 text-blue-400" />
-                ĐỐI TƯỢNG ĐÃ DỰNG ({vectors.length + segments.length + lines.length + planes.length})
-              </span>
-              <span className="text-[10px] text-zinc-500">
-                {vectors.length} véc tơ • {segments.length} đoạn • {lines.length} đường • {planes.length} mặt
-              </span>
-            </div>
-
-            {/* Véc tơ */}
-            {vectors.length > 0 && (
-              <div className="space-y-1.5">
-                <span className="text-zinc-500 font-bold block text-[10px] uppercase text-emerald-400">
-                  Véc tơ ({vectors.length}):
-                </span>
-                <div className="space-y-1 max-h-36 overflow-y-auto">
-                  {vectors.map(v => (
-                    <div
-                      key={v.id}
-                      className="bg-[#111] px-2.5 py-1.5 rounded border border-zinc-800 flex justify-between items-center text-[11px]"
-                    >
-                      <div className="flex items-center gap-2">
-                        <span
-                          className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                          style={{ backgroundColor: v.color || '#10b981' }}
-                        />
-                        <span className="font-bold text-zinc-200">{v.name}</span>
-                        <span className="text-zinc-400">({v.x}; {v.y}; {v.z})</span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => handleDeleteVector(v.id)}
-                        className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors"
-                        title="Xóa véc tơ này"
-                      >
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Đoạn thẳng */}
-            {segments.length > 0 && (
-              <div className="space-y-1.5 pt-1 border-t border-zinc-800/60">
-                <span className="text-zinc-500 font-bold block text-[10px] uppercase text-amber-400">
-                  Đoạn thẳng ({segments.length}):
-                </span>
-                <div className="space-y-1 max-h-36 overflow-y-auto">
-                  {segments.map(s => {
-                    const p1 = points.find(p => p.id === s.point1Id);
-                    const p2 = points.find(p => p.id === s.point2Id);
-                    return (
-                      <div
-                        key={s.id}
-                        className="bg-[#111] px-2.5 py-1.5 rounded border border-zinc-800 flex justify-between items-center text-[11px]"
-                      >
-                        <div className="flex items-center gap-2">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: s.color || '#f59e0b' }}
-                          />
-                          <span className="font-bold text-zinc-200">{s.name}</span>
-                          <span className="text-zinc-400">
-                            [{p1?.name || '?'}, {p2?.name || '?'}]
-                          </span>
-                          {s.length && (
-                            <span className="text-zinc-500 text-[10px]">d = {s.length.toFixed(2)}</span>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteSegment(s.id)}
-                          className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors"
-                          title="Xóa đoạn thẳng này"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Đường thẳng */}
-            {lines.length > 0 && (
-              <div className="space-y-1.5 pt-1 border-t border-zinc-800/60">
-                <span className="text-zinc-500 font-bold block text-[10px] uppercase text-pink-400">
-                  Đường thẳng ({lines.length}):
-                </span>
-                <div className="space-y-1 max-h-36 overflow-y-auto">
-                  {lines.map(l => {
-                    const p1 = points.find(p => p.id === l.point1Id);
-                    const p2 = points.find(p => p.id === l.point2Id);
-                    return (
-                      <div
-                        key={l.id}
-                        className="bg-[#111] px-2.5 py-1.5 rounded border border-zinc-800 flex justify-between items-center text-[11px]"
-                      >
-                        <div className="flex items-center gap-2 overflow-hidden">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: l.color || '#ec4899' }}
-                          />
-                          <span className="font-bold text-zinc-200 flex-shrink-0">{l.name}</span>
-                          {l.dir ? (
-                            <span className="text-zinc-400 truncate text-[10px]">
-                              u⃗({l.dir.x}; {l.dir.y}; {l.dir.z})
-                            </span>
-                          ) : (
-                            <span className="text-zinc-400 text-[10px]">
-                              ({p1?.name || '?'}{p2?.name || '?'})
-                            </span>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteLine(l.id)}
-                          className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors flex-shrink-0"
-                          title="Xóa đường thẳng này"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Mặt phẳng */}
-            {planes.length > 0 && (
-              <div className="space-y-1.5 pt-1 border-t border-zinc-800/60">
-                <span className="text-zinc-500 font-bold block text-[10px] uppercase text-blue-400">
-                  Mặt phẳng ({planes.length}):
-                </span>
-                <div className="space-y-1 max-h-36 overflow-y-auto">
-                  {planes.map(pl => {
-                    const isVisible = pl.visible !== false;
-                    const isFilled = pl.fillColor !== false;
-                    return (
-                      <div
-                        key={pl.id}
-                        className={`bg-[#111] px-2.5 py-1.5 rounded border transition-colors flex justify-between items-center text-[11px] ${
-                          !isVisible ? 'opacity-40 border-zinc-900' : 'border-zinc-800'
-                        }`}
-                      >
-                        <div className="flex items-center gap-2 overflow-hidden flex-1 mr-2">
-                          <span
-                            className="w-2.5 h-2.5 rounded-full flex-shrink-0"
-                            style={{ backgroundColor: pl.color || '#38bdf8' }}
-                          />
-                          <span className="font-bold text-zinc-200">{pl.name}:</span>
-                          <span className="text-zinc-300 truncate text-[10px]">{formatPlaneEquation(pl)}</span>
-                          {pl.pointIds && pl.pointIds.length >= 3 && pl.regionOnly && (
-                            <span className="text-[9px] px-1 py-0.2 bg-blue-950/60 text-blue-300 rounded border border-blue-900/50 flex-shrink-0 font-mono">
-                              Miền đa giác
-                            </span>
-                          )}
-                        </div>
-
-                        <div className="flex items-center gap-1 flex-shrink-0">
-                          {/* Nút Bật/Tắt tô màu mặt phẳng này */}
-                          <button
-                            type="button"
-                            onClick={() => handleTogglePlaneFill(pl.id)}
-                            className={`p-1 rounded transition-colors ${
-                              isFilled
-                                ? 'text-purple-400 hover:bg-purple-950/40'
-                                : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'
-                            }`}
-                            title={isFilled ? 'Tắt tô màu bề mặt (chỉ hiện khung viền)' : 'Bật tô màu bề mặt'}
-                          >
-                            <Palette className="w-3.5 h-3.5" />
-                          </button>
-
-                          {/* Nút Ẩn/Hiện toàn bộ mặt phẳng */}
-                          <button
-                            type="button"
-                            onClick={() => handleTogglePlaneVisibility(pl.id)}
-                            className={`p-1 rounded transition-colors ${
-                              isVisible
-                                ? 'text-zinc-400 hover:text-white hover:bg-zinc-800'
-                                : 'text-zinc-600 hover:text-zinc-400 hover:bg-zinc-800'
-                            }`}
-                            title={isVisible ? 'Ẩn mặt phẳng này' : 'Hiện mặt phẳng này'}
-                          >
-                            {isVisible ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                          </button>
-
-                          {/* Nút Xóa */}
-                          <button
-                            type="button"
-                            onClick={() => handleDeletePlane(pl.id)}
-                            className="text-zinc-500 hover:text-red-400 p-1 rounded hover:bg-zinc-800 transition-colors"
-                            title="Xóa mặt phẳng này"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-          </div>
+          {/* Danh sách đối tượng nằm bên dưới Máy tính ở cột 5 */}
+          {renderConstructedObjects()}
         </div>
       </div>
 

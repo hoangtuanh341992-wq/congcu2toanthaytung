@@ -662,31 +662,25 @@ export const Unfold2DModal: React.FC<Unfold2DModalProps> = ({
       const l = activeShapeData.dimensions.slantHeight || Math.sqrt(r * r + h * h);
       const sectorAngle = (2 * Math.PI * r) / l;
 
-      // Curved sector surface opening
-      const segments = 32;
+      // Mặt xung quanh hình nón: Trải phẳng thành HÌNH QUẠT TRÒN bán kính l
+      const segments = 48;
       const curOpenAngle = THREE.MathUtils.lerp(2 * Math.PI, sectorAngle, t);
-      const effectiveR = (2 * Math.PI * r) / curOpenAngle;
+      const curR = THREE.MathUtils.lerp(r, l, t);
 
       const coneGeo = new THREE.BufferGeometry();
       const pos: number[] = [];
       const indices: number[] = [];
 
-      // Apex point S
+      // Apex point S (Đỉnh nón)
       const apexY = THREE.MathUtils.lerp(h, 0, t);
       pos.push(0, apexY, 0); // Index 0
 
       for (let i = 0; i <= segments; i++) {
         const u = i / segments;
         const angle = (u - 0.5) * curOpenAngle;
-        let x: number, z: number;
-
-        if (t > 0.98) {
-          x = (u - 0.5) * l * sectorAngle;
-          z = l;
-        } else {
-          x = effectiveR * Math.sin(angle);
-          z = effectiveR * (1 - Math.cos(angle));
-        }
+        // Cung quạt tròn với bán kính curR (bằng l khi t = 1)
+        const x = curR * Math.sin(angle);
+        const z = curR * Math.cos(angle);
         pos.push(x, 0, z);
       }
 
@@ -700,14 +694,23 @@ export const Unfold2DModal: React.FC<Unfold2DModalProps> = ({
 
       group.add(makePanel(coneGeo, sideMat1));
 
-      // Circular base
-      const discGeo = new THREE.CircleGeometry(r, 32);
-      discGeo.rotateX(-Math.PI / 2);
+      // Mặt đáy: HÌNH TRÒN bán kính R
+      // Khi t = 1, nằm phẳng hoàn toàn trên mặt phẳng y = 0, tâm tại (0, 0, l + r)
+      const diskGeo = new THREE.CircleGeometry(r, 36);
+      diskGeo.rotateX(-Math.PI / 2); // Chuẩn hóa về mặt phẳng ngang
       const baseHinge = new THREE.Group();
-      baseHinge.position.set(0, 0, THREE.MathUtils.lerp(0, l + r, t));
-      const angleBase = THREE.MathUtils.lerp(0, Math.PI / 2, t);
-      baseHinge.rotation.x = angleBase;
-      baseHinge.add(makePanel(discGeo, baseMat));
+      if (t > 0.98) {
+        baseHinge.position.set(0, 0, l + r);
+        baseHinge.rotation.set(0, 0, 0);
+      } else {
+        baseHinge.position.set(
+          0,
+          -r * Math.sin(Math.PI * t) * (1 - t),
+          curR - r * Math.cos(Math.PI * t)
+        );
+        baseHinge.rotation.x = Math.PI * t;
+      }
+      baseHinge.add(makePanel(diskGeo, baseMat));
       group.add(baseHinge);
     }
   }, [foldProgress, activeTab, activeShapeData]);
@@ -1225,7 +1228,7 @@ export const Unfold2DModal: React.FC<Unfold2DModalProps> = ({
 // --------------------------------------------------------------------------
 // 2D SVG NET BLUEPRINT RENDERER
 // --------------------------------------------------------------------------
-interface NetSvgRendererProps {
+export interface NetSvgRendererProps {
   shapeData: UnfoldedShapeData;
   foldProgress: number; // 0 -> 100
   showEdgeLengths: boolean;
@@ -1234,7 +1237,7 @@ interface NetSvgRendererProps {
   showFaceNames: boolean;
 }
 
-const NetSvgRenderer: React.FC<NetSvgRendererProps> = ({
+export const NetSvgRenderer: React.FC<NetSvgRendererProps> = ({
   shapeData,
   foldProgress,
   showEdgeLengths,
@@ -1818,39 +1821,49 @@ const NetSvgRenderer: React.FC<NetSvgRendererProps> = ({
         className="w-full h-full max-w-2xl select-none"
       >
         <g id="cone-net">
-          {/* Sector (Lateral area) */}
+          {/* Sector (Mặt xung quanh hình nón: Hình quạt tròn) */}
           <path
             d={sectorPath}
             fill={fillSide1}
             stroke={cutStroke}
-            strokeWidth="2"
+            strokeWidth="2.5"
           />
           {showFaceNames && (
-            <text x={apexX} y={apexY + l * 0.55} fill="#fcd34d" fontSize="12" fontWeight="bold" textAnchor="middle">
-              MẶT XUNG QUANH (Hình quạt tròn l = {rawL.toFixed(1)})
-            </text>
+            <g textAnchor="middle">
+              <text x={apexX} y={apexY + l * 0.45} fill="#fcd34d" fontSize="13" fontWeight="bold">
+                MẶT XUNG QUANH: HÌNH QUẠT TRÒN
+              </text>
+              <text x={apexX} y={apexY + l * 0.45 + 16} fill="#fbbf24" fontSize="11">
+                Bán kính quạt l = {rawL.toFixed(2)} • Góc ở tâm θ = {sectorAngleDeg.toFixed(1)}°
+              </text>
+            </g>
           )}
 
-          {/* Circular Base */}
+          {/* Circular Base (Mặt đáy: Hình tròn bán kính R) */}
           <circle
             cx={midX}
             cy={discCenterY}
             r={r}
             fill={fillBase}
             stroke={cutStroke}
-            strokeWidth="2"
+            strokeWidth="2.5"
           />
           {showFaceNames && (
-            <text x={midX} y={discCenterY} fill="#93c5fd" fontSize="11" textAnchor="middle">
-              ĐÁY TRÒN (R = {rawR})
-            </text>
+            <g textAnchor="middle">
+              <text x={midX} y={discCenterY - 6} fill="#93c5fd" fontSize="12" fontWeight="bold">
+                ĐÁY: HÌNH TRÒN
+              </text>
+              <text x={midX} y={discCenterY + 12} fill="#60a5fa" fontSize="11">
+                Bán kính R = {rawR.toFixed(2)} • Chu vi = 2πR ≈ {(2 * Math.PI * rawR).toFixed(2)}
+              </text>
+            </g>
           )}
 
           {/* Crease tangent line */}
           <line
-            x1={midX - 15}
+            x1={midX - 20}
             y1={midY}
-            x2={midX + 15}
+            x2={midX + 20}
             y2={midY}
             stroke={creaseStroke}
             strokeWidth="2"
@@ -1871,21 +1884,27 @@ const NetSvgRenderer: React.FC<NetSvgRendererProps> = ({
           {/* Vertex Labels */}
           {showVertexLabels && (
             <g fill="#ffffff" fontSize="12" fontWeight="bold" fontFamily="monospace">
-              <text x={apexX} y={apexY - 10} textAnchor="middle" fill="#f59e0b">S (Đỉnh)</text>
+              <text x={apexX} y={apexY - 12} textAnchor="middle" fill="#f59e0b">S (Đỉnh quạt & Đỉnh nón)</text>
               <text x={x1 + 10} y={y1 + 10}>A</text>
-              <text x={x2 - 20} y={y2 + 10}>A'</text>
-              <text x={midX} y={discCenterY + r + 18} textAnchor="middle">O (Tâm đáy)</text>
+              <text x={x2 - 24} y={y2 + 10}>A'</text>
+              <text x={midX} y={discCenterY + r + 20} textAnchor="middle" fill="#93c5fd">O (Tâm đáy tròn)</text>
             </g>
           )}
 
           {/* Dimensions */}
           {showEdgeLengths && (
             <g fill="#a1a1aa" fontSize="11" fontFamily="monospace">
-              <text x={(apexX + x1) / 2 + 18} y={(apexY + y1) / 2}>
-                l = {rawL.toFixed(2)}
+              <text x={(apexX + x1) / 2 + 14} y={(apexY + y1) / 2 - 4} fill="#fbbf24">
+                Đường sinh l = {rawL.toFixed(2)}
               </text>
-              <text x={apexX} y={apexY + 45} textAnchor="middle" fill="#f59e0b">
+              <text x={(apexX + x2) / 2 - 14} y={(apexY + y2) / 2 - 4} textAnchor="end" fill="#fbbf24">
+                Đường sinh l = {rawL.toFixed(2)}
+              </text>
+              <text x={apexX} y={apexY + 36} textAnchor="middle" fill="#f59e0b" fontWeight="bold">
                 θ = {sectorAngleDeg.toFixed(1)}°
+              </text>
+              <text x={midX} y={midY - 8} textAnchor="middle" fill="#34d399">
+                Độ dài cung quạt = 2πR ≈ {(2 * Math.PI * rawR).toFixed(2)}
               </text>
             </g>
           )}

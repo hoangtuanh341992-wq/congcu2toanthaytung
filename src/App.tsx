@@ -27,7 +27,7 @@ export default function App() {
               <div>
                 <div className="flex items-center gap-2">
                   <h1 className="font-bold text-sm md:text-base tracking-tight text-white font-mono">
-                    MATH<span className="text-blue-500">CORE</span>
+                    CONG CU TOAN <span className="text-blue-500">HVT2</span>
                   </h1>
                   <span className="text-[10px] uppercase font-mono px-1.5 py-0.5 rounded bg-zinc-900 text-zinc-400 border border-zinc-800">
                     v4.0
@@ -59,7 +59,7 @@ export default function App() {
                   }`}
                 >
                   <Compass className="w-3.5 h-3.5" />
-                  <span>2D Calculus</span>
+                  <span>Công cụ 2D</span>
                 </button>
 
                 <button
@@ -72,7 +72,7 @@ export default function App() {
                   }`}
                 >
                   <Box className="w-3.5 h-3.5" />
-                  <span>3D Oxyz Space</span>
+                  <span>Công cụ 3D</span>
                 </button>
               </div>
 
@@ -99,7 +99,7 @@ export default function App() {
       {/* Footer */}
       <footer className="bg-[#0a0a0a] border-t border-[#222] py-4 px-6 text-center text-xs text-zinc-500 font-mono">
         <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-2 text-[11px]">
-          <span>MATHCORE • ADVANCED ANALYTICAL SUITE</span>
+          <span>CONG CU TOAN HVT2 • ADVANCED ANALYTICAL SUITE</span>
           <span>KHẢO SÁT HÀM SỐ 2D & KHÔNG GIAN OXYZ 3D • 60 FPS COMPUTATION</span>
         </div>
       </footer>

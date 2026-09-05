@@ -95,13 +95,8 @@ export function computeInSceneUnfolding(
   // 1. PYRAMID QUAD (Hình chóp tứ giác S.ABCD)
   // --------------------------------------------------------------------------
   if (solid.type === 'pyramid_quad' && solid.pointIds.length >= 5) {
-    const rawS = ptsMap.get(solid.pointIds[0]);
-    const rawA = ptsMap.get(solid.pointIds[1]);
-    const rawB = ptsMap.get(solid.pointIds[2]);
-    const rawC = ptsMap.get(solid.pointIds[3]);
-    const rawD = ptsMap.get(solid.pointIds[4]);
-
-    if (!rawS || !rawA || !rawB || !rawC || !rawD) {
+    const pts = solid.pointIds.map(id => ptsMap.get(id)).filter(Boolean) as Point3D[];
+    if (pts.length < 5) {
       return {
         isSupported: false,
         solidType: solid.type,
@@ -112,6 +107,17 @@ export function computeInSceneUnfolding(
         unsupportedReason: 'Thiếu điểm đỉnh của hình chóp tứ giác.',
       };
     }
+
+    let apexIdx = pts.findIndex(p => p.name === 'S' || p.id === 'S');
+    if (apexIdx === -1) {
+      apexIdx = 0; // default first point
+    }
+    const rawS = pts[apexIdx];
+    const basePts = pts.filter((_, idx) => idx !== apexIdx);
+    const rawA = basePts[0];
+    const rawB = basePts[1];
+    const rawC = basePts[2];
+    const rawD = basePts[3];
 
     const S = mapCoord(rawS.x, rawS.y, rawS.z);
     const A = mapCoord(rawA.x, rawA.y, rawA.z);
@@ -254,12 +260,8 @@ export function computeInSceneUnfolding(
   // 2. TETRAHEDRON (Tứ diện / Chóp tam giác S.ABC)
   // --------------------------------------------------------------------------
   if (solid.type === 'tetrahedron' && solid.pointIds.length >= 4) {
-    const rawA = ptsMap.get(solid.pointIds[0]);
-    const rawB = ptsMap.get(solid.pointIds[1]);
-    const rawC = ptsMap.get(solid.pointIds[2]);
-    const rawS = ptsMap.get(solid.pointIds[3]);
-
-    if (!rawA || !rawB || !rawC || !rawS) {
+    const pts = solid.pointIds.map(id => ptsMap.get(id)).filter(Boolean) as Point3D[];
+    if (pts.length < 4) {
       return {
         isSupported: false,
         solidType: solid.type,
@@ -270,6 +272,16 @@ export function computeInSceneUnfolding(
         unsupportedReason: 'Thiếu điểm đỉnh của tứ diện.',
       };
     }
+
+    let apexIdx = pts.findIndex(p => p.name === 'S' || p.id === 'S');
+    if (apexIdx === -1) {
+      apexIdx = 3; // default last point (e.g. O in OABC or C)
+    }
+    const rawS = pts[apexIdx];
+    const basePts = pts.filter((_, idx) => idx !== apexIdx);
+    const rawA = basePts[0];
+    const rawB = basePts[1];
+    const rawC = basePts[2];
 
     const A = mapCoord(rawA.x, rawA.y, rawA.z);
     const B = mapCoord(rawB.x, rawB.y, rawB.z);
@@ -753,23 +765,45 @@ export function computeInSceneUnfolding(
       },
     ];
 
-    // 2 Bases as flat disks
-    const diskSegments = 24;
+    // 2 Bases as flat disks (Hình tròn đáy)
+    // Khi trải phẳng hoàn toàn (t = 1):
+    // Cả 2 hình tròn đáy nằm phẳng trên cùng mặt phẳng z = 0 với hình chữ nhật thân,
+    // tiếp xúc tại trung điểm cạnh đáy dưới (y = 0) và cạnh đáy trên (y = h).
+    const diskSegments = 32;
     const makeDisk = (id: string, name: string, yPos: number, rotSign: number) => {
       const diskVerts: THREE.Vector3[] = [];
       const diskEdges: [THREE.Vector3, THREE.Vector3][] = [];
       const hingeY = yPos;
+      // Góc gập: từ 0 đến rotSign * PI/2
       const angleRot = (Math.PI / 2) * t * rotSign;
-      const dCenter = new THREE.Vector3(0, hingeY + (t > 0.98 ? 0 : 0), THREE.MathUtils.lerp(0, -r, t));
+      
+      // Tọa độ tâm đáy chuyển động mượt từ (0, hingeY, 0) đến (0, hingeY - rotSign * r, 0)
+      const dCenter = new THREE.Vector3(
+        0,
+        hingeY - rotSign * r * Math.sin(Math.PI * t * 0.5),
+        -r * Math.sin(Math.PI * t) * 0.4 * (1 - t)
+      );
+      if (t > 0.98) {
+        dCenter.set(0, hingeY - rotSign * r, 0);
+      }
 
       const rimPts: THREE.Vector3[] = [];
       for (let i = 0; i < diskSegments; i++) {
         const theta = (i / diskSegments) * 2 * Math.PI;
-        // In local disk coords
-        const localPt = new THREE.Vector3(r * Math.cos(theta), 0, r * Math.sin(theta));
-        // Rotate around X axis
-        const rotPt = rotateAroundAxis(localPt, new THREE.Vector3(1, 0, 0), angleRot);
-        rimPts.push(dCenter.clone().add(rotPt));
+        if (t > 0.98) {
+          // Nằm phẳng tuyệt đối trên mặt phẳng z = 0
+          rimPts.push(new THREE.Vector3(
+            dCenter.x + r * Math.sin(theta),
+            dCenter.y + r * Math.cos(theta),
+            0
+          ));
+        } else {
+          // In local disk coords
+          const localPt = new THREE.Vector3(r * Math.cos(theta), 0, r * Math.sin(theta));
+          // Rotate around X axis
+          const rotPt = rotateAroundAxis(localPt, new THREE.Vector3(1, 0, 0), angleRot);
+          rimPts.push(dCenter.clone().add(rotPt));
+        }
       }
 
       for (let i = 0; i < diskSegments; i++) {
@@ -785,12 +819,12 @@ export function computeInSceneUnfolding(
         vertices: diskVerts,
         edgeSegments: diskEdges,
         center: dCenter,
-        normal: new THREE.Vector3(0, rotSign, 0),
+        normal: new THREE.Vector3(0, 0, 1),
       });
     };
 
-    makeDisk('face_cyl_base_bot', 'Đáy dưới hình trụ', 0, 1);
-    makeDisk('face_cyl_base_top', 'Đáy trên hình trụ', h, -1);
+    makeDisk('face_cyl_base_bot', 'Đáy dưới: Hình tròn bán kính R', 0, 1);
+    makeDisk('face_cyl_base_top', 'Đáy trên: Hình tròn bán kính R', h, -1);
 
     return {
       isSupported: true,
@@ -798,7 +832,7 @@ export function computeInSceneUnfolding(
       solidName: solid.name || 'Hình trụ tròn xoay',
       faces,
       labels: [
-        { id: 'lbl_h', text: `h = ${h}`, position: new THREE.Vector3((Math.PI * r) + 0.5, h / 2, 0), color: '#38bdf8' },
+        { id: 'lbl_h', text: `Chiều cao h = ${h}`, position: new THREE.Vector3((Math.PI * r) + 0.5, h / 2, 0), color: '#38bdf8' },
         { id: 'lbl_2piR', text: `Chu vi đáy 2πR ≈ ${(2 * Math.PI * r).toFixed(2)}`, position: new THREE.Vector3(0, -0.6, 0), color: '#34d399' },
       ],
       dimensionAnnotations: [],
@@ -812,62 +846,89 @@ export function computeInSceneUnfolding(
     const r = solid.radius || 2.5;
     const h = solid.height || 5;
     const l = Math.sqrt(r * r + h * h);
-    const sectorAngle = (2 * Math.PI * r) / l;
+    const sectorAngle = (2 * Math.PI * r) / l; // in radians
+    const sectorAngleDeg = (360 * r) / l;
 
-    const segments = 24;
-    const openAngle = THREE.MathUtils.lerp(2 * Math.PI, sectorAngle, t);
-    const effectiveR = (2 * Math.PI * r) / openAngle;
-
+    // Mặt xung quanh của hình nón được trải phẳng chuẩn xác thành một HÌNH QUẠT TRÒN:
+    // - Đỉnh hình quạt tại đỉnh nón S (0, 0, 0) khi t = 1
+    // - Bán kính hình quạt = đường sinh l = √(r² + h²)
+    // - Góc ở tâm hình quạt θ = (r / l) × 360° = 2π(r / l) rad
+    // - Độ dài cung quạt = θ × l = 2πr (chính xác bằng chu vi đáy hình tròn)
+    // - 2 mép thẳng của quạt là 2 bán kính l nối đỉnh S với 2 đầu mút của cung quạt
+    const segments = 48; // Đảm bảo cung quạt tròn mượt mà chuẩn xác
+    const curOpenAngle = THREE.MathUtils.lerp(2 * Math.PI, sectorAngle, t);
+    const curR = THREE.MathUtils.lerp(r, l, t);
     const apex = new THREE.Vector3(0, THREE.MathUtils.lerp(h, 0, t), 0);
+
     const rimPts: THREE.Vector3[] = [];
     const vertices: THREE.Vector3[] = [];
     const edgeSegments: [THREE.Vector3, THREE.Vector3][] = [];
 
     for (let i = 0; i <= segments; i++) {
       const u = i / segments;
-      const angle = (u - 0.5) * openAngle;
-      let x: number, z: number;
-
-      if (t > 0.98) {
-        x = (u - 0.5) * l * sectorAngle;
-        z = l;
-      } else {
-        x = effectiveR * Math.sin(angle);
-        z = effectiveR * (1 - Math.cos(angle));
-      }
+      const angle = (u - 0.5) * curOpenAngle;
+      // Cung tròn: Tọa độ x = curR * sin(angle), z = curR * cos(angle)
+      // Tại t = 1: curR = l, tạo thành cung tròn bán kính l chính xác tuyệt đối!
+      const x = curR * Math.sin(angle);
+      const z = curR * Math.cos(angle);
       rimPts.push(new THREE.Vector3(x, 0, z));
     }
 
+    // Các tam giác quạt từ đỉnh S nối đến từng phân đoạn của cung quạt tròn
     for (let i = 0; i < segments; i++) {
       vertices.push(apex, rimPts[i], rimPts[i + 1]);
+      // Đoạn cung tròn của hình quạt
       edgeSegments.push([rimPts[i], rimPts[i + 1]]);
     }
+    // 2 bán kính thẳng của hình quạt tròn từ Đỉnh S đến 2 đầu mút cung tròn
     edgeSegments.push([apex, rimPts[0]]);
     edgeSegments.push([apex, rimPts[segments]]);
 
     const faces: UnfoldedFaceMesh[] = [
       {
         id: 'face_cone_lateral',
-        name: `Mặt xung quanh hình nón (trải thành hình quạt bán kính l = ${l.toFixed(2)})`,
+        name: `Mặt xung quanh: Hình quạt tròn (bán kính l = ${l.toFixed(2)}, góc ở tâm θ = ${sectorAngleDeg.toFixed(1)}°)`,
         color: '#f59e0b',
         vertices,
         edgeSegments,
-        center: new THREE.Vector3(0, h / 3, l / 2),
+        center: new THREE.Vector3(0, apex.y / 3, curR * 0.55),
         normal: new THREE.Vector3(0, 1, 0),
       },
     ];
 
-    // Base disk
-    const diskSegments = 24;
-    const dCenter = new THREE.Vector3(0, 0, THREE.MathUtils.lerp(0, l + r, t));
+    // Mặt đáy của hình nón: HÌNH TRÒN bán kính R
+    // Khi t = 1, hình tròn đáy tiếp xúc với trung điểm cung quạt tròn tại (0, 0, l),
+    // và trải phẳng hoàn toàn trên mặt phẳng y = 0 với tâm tại (0, 0, l + r)
+    const diskSegments = 36;
     const diskVerts: THREE.Vector3[] = [];
     const diskEdges: [THREE.Vector3, THREE.Vector3][] = [];
     const baseRim: THREE.Vector3[] = [];
 
-    for (let i = 0; i < diskSegments; i++) {
-      const theta = (i / diskSegments) * 2 * Math.PI;
-      baseRim.push(dCenter.clone().add(new THREE.Vector3(r * Math.cos(theta), 0, r * Math.sin(theta))));
+    // Tọa độ tâm đáy chuyển dịch mượt từ (0, 0, 0) ở t = 0 đến (0, 0, l + r) ở t = 1
+    const dCenter = new THREE.Vector3(
+      0,
+      -r * Math.sin(Math.PI * t) * (1 - t),
+      curR - r * Math.cos(Math.PI * t)
+    );
+    if (t > 0.98) {
+      dCenter.set(0, 0, l + r);
     }
+
+    for (let i = 0; i < diskSegments; i++) {
+      const alpha = (i / diskSegments) * 2 * Math.PI;
+      if (t > 0.98) {
+        // Nằm phẳng hoàn toàn trên mặt phẳng y = 0, tiếp xúc với cung quạt tại (0, 0, l)
+        const bx = r * Math.sin(alpha);
+        const bz = (l + r) - r * Math.cos(alpha);
+        baseRim.push(new THREE.Vector3(bx, 0, bz));
+      } else {
+        const dx = r * Math.sin(alpha);
+        const dy = -r * Math.sin(Math.PI * t) + r * Math.cos(alpha) * Math.sin(Math.PI * t);
+        const dz = curR - r * Math.cos(Math.PI * t) + r * Math.cos(alpha) * Math.cos(Math.PI * t);
+        baseRim.push(new THREE.Vector3(dx, dy, dz));
+      }
+    }
+
     for (let i = 0; i < diskSegments; i++) {
       const next = (i + 1) % diskSegments;
       diskVerts.push(dCenter, baseRim[i], baseRim[next]);
@@ -876,7 +937,7 @@ export function computeInSceneUnfolding(
 
     faces.push({
       id: 'face_cone_base',
-      name: 'Đáy hình tròn bán kính R',
+      name: `Mặt đáy: Hình tròn (bán kính R = ${r.toFixed(2)}, chu vi = ${(2 * Math.PI * r).toFixed(2)})`,
       color: '#3b82f6',
       vertices: diskVerts,
       edgeSegments: diskEdges,
@@ -884,14 +945,19 @@ export function computeInSceneUnfolding(
       normal: new THREE.Vector3(0, 1, 0),
     });
 
+    const midRimPt = rimPts[Math.floor(segments / 2)];
     return {
       isSupported: true,
       solidType: 'cone',
       solidName: solid.name || 'Hình nón tròn xoay',
       faces,
       labels: [
-        { id: 'lbl_l', text: `Đường sinh l ≈ ${l.toFixed(2)}`, position: rimPts[0].clone().add(apex).multiplyScalar(0.5), color: '#fbbf24' },
-        { id: 'lbl_theta', text: `Góc quạt θ ≈ ${((sectorAngle * 180) / Math.PI).toFixed(1)}°`, position: apex.clone().add(new THREE.Vector3(0, 0.4, 0.5)), color: '#f59e0b' },
+        { id: 'lbl_apex', text: 'Đỉnh S', position: apex.clone().add(new THREE.Vector3(0, 0.4, -0.2)), color: '#fbbf24' },
+        { id: 'lbl_l1', text: `Đường sinh l ≈ ${l.toFixed(2)}`, position: rimPts[0].clone().add(apex).multiplyScalar(0.5).add(new THREE.Vector3(-0.4, 0.2, 0)), color: '#fbbf24' },
+        { id: 'lbl_l2', text: `Đường sinh l ≈ ${l.toFixed(2)}`, position: rimPts[segments].clone().add(apex).multiplyScalar(0.5).add(new THREE.Vector3(0.4, 0.2, 0)), color: '#fbbf24' },
+        { id: 'lbl_theta', text: `Góc ở tâm quạt θ ≈ ${sectorAngleDeg.toFixed(1)}°`, position: apex.clone().add(new THREE.Vector3(0, 0.3, curR * 0.25)), color: '#f59e0b' },
+        { id: 'lbl_arc', text: `Độ dài cung quạt = 2πR ≈ ${(2 * Math.PI * r).toFixed(2)}`, position: midRimPt.clone().add(new THREE.Vector3(0, 0.2, 0.4)), color: '#f59e0b' },
+        { id: 'lbl_base', text: `Đáy tròn: R ≈ ${r.toFixed(2)}`, position: dCenter.clone().add(new THREE.Vector3(0, 0.3, 0)), color: '#60a5fa' },
       ],
       dimensionAnnotations: [],
     };
